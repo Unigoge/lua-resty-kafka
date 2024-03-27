@@ -16,12 +16,19 @@ Table of Contents
             * [new](#new)
             * [fetch_metadata](#fetch_metadata)
             * [refresh](#refresh)
+            * [choose_api_version](#choose_api_version)
     * [resty.kafka.producer](#restykafkaproducer)
         * [Methods](#methods)
             * [new](#new)
             * [send](#send)
             * [offset](#offset)
             * [flush](#flush)
+    * [resty.kafka.basic-consumer](#restykafkabasic-consumer)
+        * [Methods](#methods)
+            * [new](#new)
+            * [list_offset](#list_offset)
+            * [fetch](#fetch)
+* [Errors](#errors)
 * [Installation](#installation)
 * [TODO](#todo)
 * [Author](#author)
@@ -43,8 +50,9 @@ http://wiki.nginx.org/HttpLuaModule
 This Lua library takes advantage of ngx_lua's cosocket API, which ensures
 100% nonblocking behavior.
 
-Note that at least [ngx_lua 0.9.3](https://github.com/openresty/lua-nginx-module/tags) or [ngx_openresty 1.4.3.7](http://openresty.org/#Download) is required, and unfortunately only LuaJIT supported (`--with-luajit`).
+Note that at least [ngx_lua 0.9.3](https://github.com/openresty/lua-nginx-module/tags) or [openresty 1.4.3.7](http://openresty.org/#Download) is required, and unfortunately only LuaJIT supported (`--with-luajit`).
 
+Note for `ssl` connections at least [ngx_lua 0.9.11](https://github.com/openresty/lua-nginx-module/tags) or [openresty 1.7.4.1](http://openresty.org/#Download) is required, and unfortunately only LuaJIT supported (`--with-luajit`).
 
 Synopsis
 ========
@@ -60,7 +68,17 @@ Synopsis
                 local producer = require "resty.kafka.producer"
 
                 local broker_list = {
-                    { host = "127.0.0.1", port = 9092 },
+                    {
+                        host = "127.0.0.1",
+                        port = 9092,
+
+                        -- optional auth
+                        sasl_config = {
+                            mechanism = "PLAIN",
+                            user = "USERNAME",
+                            password = "PASSWORD",
+                        },
+                    },
                 }
 
                 local key = "key"
@@ -130,10 +148,23 @@ The `broker_list` is a list of broker, like the below
 [
     {
         "host": "127.0.0.1",
-        "port": 9092
+        "port": 9092,
+
+        // optional auth
+        "sasl_config": {
+            //support mechanism: PLAIN、SCRAM-SHA-256、SCRAM-SHA-512
+            "mechanism": "PLAIN",
+            "user": "USERNAME",
+            "password": "PASSWORD"
+        }
     }
 ]
 ```
+* `sasl_config`
+
+  support mechanism: PLAIN、SCRAM-SHA-256、SCRAM-SHA-512.
+
+  warn:SCRAM-SHA-256、SCRAM-SHA-512 need install lua-resty-jit-uuid and lua-resty-openssl
 
 An optional `client_config` table can be specified. The following options are as follows:
 
@@ -155,6 +186,17 @@ client config
 
     Specifies the time to auto refresh the metadata in milliseconds. Then metadata will not auto refresh if is nil.
 
+* `ssl`
+
+    Specifies if client should use ssl connection. Defaults to false. See: https://github.com/openresty/lua-nginx-module#tcpsocksslhandshake
+
+* `ssl_verify`
+
+    Specifies if client should perform SSL verification. Defaults to false. See: https://github.com/openresty/lua-nginx-module#tcpsocksslhandshake
+
+* `resolver`
+
+    Specifies a function to host resolving, which returns a string of IP or `nil`, to override system default host resolver. Default `nil`, no resolving performed. Example `function(host) if host == "some_host" then return "10.11.12.13" end end`
 
 [Back to TOC](#table-of-contents)
 
@@ -173,6 +215,19 @@ In case of errors, returns `nil` with a string describing the error.
 This will refresh the metadata of all topics which have been fetched by `fetch_metadata`.
 In case of success, return all brokers and all partitions of all topics.
 In case of errors, returns `nil` with a string describing the error.
+
+
+[Back to TOC](#table-of-contents)
+
+#### choose_api_version
+
+`syntax: api_version = c:choose_api_version(api_key, min_version, max_version)`
+
+This helps the client to select the correct version of the `api_key` corresponding to the API.
+
+When `min_version` and `max_version` are provided, it will act as a limit and the selected versions in the return value will not exceed their limits no matter how high or low the broker supports the API version. When they are not provided, it will follow the range of versions supported by the broker.
+
+Tip: The version selection strategy is to choose the maximum version within the allowed range.
 
 
 [Back to TOC](#table-of-contents)
@@ -200,7 +255,7 @@ It's recommend to use async producer_type.
 
 An optional options table can be specified. The following options are as follows:
 
-`socket_timeout`, `keepalive_timeout`, `keepalive_size`, `refresh_interval` are the same as in `client_config`
+`socket_timeout`, `keepalive_timeout`, `keepalive_size`, `refresh_interval`, `ssl`, `ssl_verify`  are the same as in `client_config`
 
 producer config, most like in <http://kafka.apache.org/documentation.html#producerconfigs>
 
@@ -224,21 +279,26 @@ producer config, most like in <http://kafka.apache.org/documentation.html#produc
 
     Specifies the `retry.backoff.ms`. Default `100`.
 
+* `api_version`
+
+    Specifies the produce API version. Default `0`.
+    If you use Kafka 0.10.0.0 or higher, `api_version` can use `0`, `1` or `2`.
+    If you use Kafka 0.9.x, `api_version` should be `0` or `1`.
+    If you use Kafka 0.8.x, `api_version` should be `0`.
+
 * `partitioner`
 
     Specifies the partitioner that choose partition from key and partition num.
     `syntax: partitioner = function (key, partition_num, correlation_id) end`,
     the correlation_id is an auto increment id in producer. Default partitioner is:
 
-
-```lua
-local function default_partitioner(key, num, correlation_id)
-    local id = key and crc32(key) or correlation_id
-
-    -- partition_id is continuous and start from 0
-    return id % num
-end
-```
+    ```lua
+    local function default_partitioner(key, num, correlation_id)
+        local id = key and crc32(key) or correlation_id
+        -- partition_id is continuous and start from 0
+        return id % num
+    end
+    ```
 
 buffer config ( only work `producer_type` = "async" )
 
@@ -268,6 +328,18 @@ buffer config ( only work `producer_type` = "async" )
     `index` is the message_queue length, should not use `#message_queue`.
     when `retryable` is `true` that means kafka server surely not committed this messages, you can safely retry to send;
     and else means maybe, recommend to log to somewhere.
+
+* `wait_on_buffer_full`
+
+    Specifies whether to wait when the buffer queue is full, Default `false`.
+    When buffer queue is full, if option passed `true`, 
+    will use semaphore wait function to block coroutine until timeout or buffer queue has reduced,
+    Otherwise, return "buffer overflow" error with `false`.
+    Notice, it could not be used in those phases which do not support yields, i.e. log phase.
+
+* `wait_buffer_timeout`
+
+    Specifies the max wait time when buffer is full, Default `5` seconds.
 
 Not support compression now.
 
@@ -315,6 +387,147 @@ Always return `true`.
 
 [Back to TOC](#table-of-contents)
 
+
+resty.kafka.basic-consumer
+----------------------
+
+To load this module, just do this
+
+```lua
+    local bconsumer = require "resty.kafka.basic-consumer"
+```
+
+This module is a minimalist implementation of a consumer, providing the `list_offset` API for querying by time or getting the start and end offset and the `fetch` API for getting messages in a topic.
+
+In a single call, only the information of a single partition in a single topic can be fetched, and batch fetching is not supported for now. The basic consumer does not support the consumer group related API, so you need to fetch the message after getting the offset through the `list_offset` API, or your service can manage the offset itself.
+
+[Back to TOC](#table-of-contents)
+
+### Methods
+
+#### new
+
+`syntax: c = bconsumer:new(broker_list, client_config)`
+
+The `broker_list` is a list of broker, like the below
+
+```json
+[
+    {
+        "host": "127.0.0.1",
+        "port": 9092,
+
+        // optional auth
+        "sasl_config": {
+            "mechanism": "PLAIN",
+            "user": "USERNAME",
+            "password": "PASSWORD"
+        }
+    }
+]
+```
+
+An optional `client_config` table can be specified. The following options are as follows:
+
+client config
+
+* `socket_timeout`
+
+    Specifies the network timeout threshold in milliseconds. *SHOULD* lagrer than the `request_timeout`.
+
+* `keepalive_timeout`
+
+    Specifies the maximal idle timeout (in milliseconds) for the keepalive connection.
+
+* `keepalive_size`
+
+    Specifies the maximal number of connections allowed in the connection pool for per Nginx worker.
+
+* `refresh_interval`
+
+    Specifies the time to auto refresh the metadata in milliseconds. Then metadata will not auto refresh if is nil.
+
+* `ssl`
+
+    Specifies if client should use ssl connection. Defaults to false. See: https://github.com/openresty/lua-nginx-module#tcpsocksslhandshake
+
+* `ssl_verify`
+
+    Specifies if client should perform SSL verification. Defaults to false. See: https://github.com/openresty/lua-nginx-module#tcpsocksslhandshake
+
+* `isolation_level`
+	This setting controls the visibility of transactional records. See: https://kafka.apache.org/protocol.html
+
+* `client_rack`
+
+    Rack ID of the consumer making this request. See: https://kafka.apache.org/protocol.html
+
+[Back to TOC](#table-of-contents)
+
+#### list_offset
+`syntax: offset, err = c:list_offset(topic, partition, timestamp)`
+
+The parameter timestamp can be a UNIX timestamp or a constant defined in `resty.kafka.protocol.consumer`, `LIST_OFFSET_TIMESTAMP_LAST`, `LIST_OFFSET_TIMESTAMP_FIRST`, `LIST_OFFSET_TIMESTAMP_MAX`, used to get the initial and latest offsets, etc., semantics with the ListOffsets API in Apache Kafka. See: https://kafka.apache.org/protocol.html#The_Messages_ListOffsets
+
+In case of success, return the offset of the specified case.
+In case of errors, returns `nil` with a string describing the error.
+
+[Back to TOC](#table-of-contents)
+
+#### fetch
+
+`syntax: result, err = c:fetch(topic, partition, offset)`
+
+In case of success, return the following `result` of the specified case.
+In case of errors, returns `nil` with a string describing the error.
+
+The `result` will contain more information such as the messages:
+
+* `records`
+
+    The table containing the content of the message.
+
+* `errcode`
+
+    The error code of Fetch API. See: https://kafka.apache.org/protocol.html#protocol_error_codes
+
+* `high_watermark`
+
+    The high watermark of Fetch API. See: https://kafka.apache.org/protocol.html#The_Messages_Fetch
+
+* `last_stable_offset`
+
+    The last stable offset of Fetch API. Content depends on the API version, maybe nil. See: https://kafka.apache.org/protocol.html#The_Messages_Fetch that response API version above v4
+
+* `log_start_offset`
+
+    The log start offset of Fetch API. Content depends on the API version, maybe nil. See: https://kafka.apache.org/protocol.html#The_Messages_Fetch that response API version above v5
+
+* `aborted_transactions`
+
+    The aborted transactions of Fetch API. Content depends on the API version, maybe nil. See: https://kafka.apache.org/protocol.html#The_Messages_Fetch that response API version above v4
+
+* `preferred_read_replica`
+
+    The preferred read replica of Fetch API. Content depends on the API version, maybe nil. See: https://kafka.apache.org/protocol.html#The_Messages_Fetch that response API version above v11
+
+
+[Back to TOC](#table-of-contents)
+
+
+Errors
+======
+
+When you call the modules provided in this library, you may get some errors.
+Depending on the source, they can be divided into the following categories.
+
+* Network errors: such as connection rejected, connection timeout, etc. You need to check the connection status of each service in your environment.
+
+* Metadata-related errors: such as Metadata or ApiVersion data cannot be retrieved properly; the specified topic or partition does not exist, etc. You need to check the Kafka Broker and client configuration.
+
+* Error returned by Kafka: sometimes Kafka will include err_code data in the response data, When this problem occurs, the `err` in the return value looks like this `OFFSET_OUT_OF_RANGE`, all uppercase characters, and separated by underscores, and in the current library we provide [a error list of mappings](lib/resty/kafka/errors.lua) corresponding to the textual descriptions. To learn more about these errors, see the descriptions in the [Kafka documentation](https://kafka.apache.org/protocol.html#protocol_error_codes).
+
+
 Installation
 ============
 
@@ -359,7 +572,7 @@ Copyright and License
 
 This module is licensed under the BSD license.
 
-Copyright (C) 2014-2014, by Dejiang Zhu (doujiang24) <doujiang24@gmail.com>.
+Copyright (C) 2014-2020, by Dejiang Zhu (doujiang24) <doujiang24@gmail.com>.
 
 All rights reserved.
 
@@ -383,4 +596,3 @@ See Also
 * the [sarama](https://github.com/Shopify/sarama)
 
 [Back to TOC](#table-of-contents)
-

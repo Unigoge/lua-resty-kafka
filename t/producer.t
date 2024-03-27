@@ -17,7 +17,12 @@ our $HttpConfig = qq{
 $ENV{TEST_NGINX_RESOLVER} = '8.8.8.8';
 $ENV{TEST_NGINX_KAFKA_HOST} = '127.0.0.1';
 $ENV{TEST_NGINX_KAFKA_PORT} = '9092';
+$ENV{TEST_NGINX_KAFKA_SSL_PORT} = '9093';
 $ENV{TEST_NGINX_KAFKA_ERR_PORT} = '9091';
+$ENV{TEST_NGINX_KAFKA_SASL_PORT} = '9094';
+$ENV{TEST_NGINX_KAFKA_SASL_USER} = 'admin';
+$ENV{TEST_NGINX_KAFKA_SASL_PWD} = 'admin-secret';
+
 
 no_long_string();
 #no_diff();
@@ -61,7 +66,42 @@ GET /t
 
 
 
-=== TEST 2: broker list has bad one
+=== TEST 2: simple ssl send
+--- http_config eval: $::HttpConfig
+--- config
+    location /t {
+        content_by_lua '
+
+            local cjson = require "cjson"
+            local producer = require "resty.kafka.producer"
+
+            local broker_list = {
+                { host = "$TEST_NGINX_KAFKA_HOST", port = $TEST_NGINX_KAFKA_SSL_PORT },
+            }
+
+            local message = "halo world"
+
+            local p = producer:new(broker_list, { ssl = true })
+
+            local offset, err = p:send("test", nil, message)
+            if not offset then
+                ngx.say("send err:", err)
+                return
+            end
+
+            ngx.say("offset: ", tostring(offset))
+        ';
+    }
+--- request
+GET /t
+--- response_body_like
+.*offset.*
+--- no_error_log
+[error]
+
+
+
+=== TEST 3: broker list has bad one
 --- http_config eval: $::HttpConfig
 --- config
     location /t {
@@ -96,7 +136,7 @@ GET /t
 
 
 
-=== TEST 3: two send
+=== TEST 4: two send
 --- http_config eval: $::HttpConfig
 --- config
     location /t {
@@ -138,7 +178,7 @@ offset diff: 1
 
 
 
-=== TEST 4: two topic send
+=== TEST 5: two topic send
 --- http_config eval: $::HttpConfig
 --- config
     location /t {
@@ -180,7 +220,7 @@ two topic successed!
 
 
 
-=== TEST 5: kafka return error
+=== TEST 6: kafka return error
 --- http_config eval: $::HttpConfig
 --- config
     location /t {
@@ -217,5 +257,148 @@ two topic successed!
 GET /t
 --- response_body
 send err:not found partition
+--- no_error_log
+[error]
+
+
+
+=== TEST 7: add a lot of messages
+--- http_config eval: $::HttpConfig
+--- config
+    location /t {
+        content_by_lua_block {
+
+            local cjson = require "cjson"
+            local producer = require "resty.kafka.producer"
+
+            local broker_list = {
+                { host = "$TEST_NGINX_KAFKA_HOST", port = $TEST_NGINX_KAFKA_PORT },
+            }
+            local topic = "test"
+            local key = "key"
+            local message = "halo world"
+            local p, err = producer:new(broker_list, { producer_type = "async", flush_time = 100})
+            -- init offset
+            p:send(topic, key, message)
+            p:flush()
+            local offset,_ = p:offset()
+            local i = 0
+            while i < 2000 do
+                 p:send(topic, key, message..tostring(i))
+                 i = i + 1
+            end
+            ngx.sleep(0.2)
+            local offset2, _ = p:offset()
+            ngx.say("offset: ", tostring(offset2 - offset))
+        }
+    }
+--- request
+GET /t
+--- response_body
+offset: 2000LL
+--- no_error_log
+[error]
+
+
+
+=== TEST 8: sasl simple send
+--- http_config eval: $::HttpConfig
+--- config
+    location /t {
+        content_by_lua '
+
+            local cjson = require "cjson"
+            local producer = require "resty.kafka.producer"
+
+            local broker_list = {
+                { host = "$TEST_NGINX_KAFKA_HOST", port = $TEST_NGINX_KAFKA_SASL_PORT ,
+                sasl_config = { mechanism="PLAIN", user="$TEST_NGINX_KAFKA_SASL_USER", password = "$TEST_NGINX_KAFKA_SASL_PWD" },},
+            }
+
+            local message = "halo world"
+
+            local p = producer:new(broker_list)
+
+            local offset, err = p:send("test", nil, message)
+            if not offset then
+                ngx.say("send err:", err)
+                return
+            end
+
+            ngx.say("offset: ", tostring(offset))
+        ';
+    }
+--- request
+GET /t
+--- response_body_like
+.*offset.*
+--- no_error_log
+[error]
+
+=== TEST 9: sasl SCRAM-SHA-256 simple send
+--- http_config eval: $::HttpConfig
+--- config
+    location /t {
+        content_by_lua '
+
+            local cjson = require "cjson"
+            local producer = require "resty.kafka.producer"
+
+            local broker_list = {
+                { host = "$TEST_NGINX_KAFKA_HOST", port = $TEST_NGINX_KAFKA_SASL_PORT ,
+                sasl_config = { mechanism="SCRAM-SHA-256", user="$TEST_NGINX_KAFKA_SASL_USER", password = "$TEST_NGINX_KAFKA_SASL_PWD" },},
+            }
+
+            local message = "halo world"
+
+            local p = producer:new(broker_list)
+
+            local offset, err = p:send("test", nil, message)
+            if not offset then
+                ngx.say("send err:", err)
+                return
+            end
+
+            ngx.say("offset: ", tostring(offset))
+        ';
+    }
+--- request
+GET /t
+--- response_body_like
+.*offset.*
+--- no_error_log
+[error]
+
+=== TEST 10: sasl SCRAM-SHA-512 simple send
+--- http_config eval: $::HttpConfig
+--- config
+    location /t {
+        content_by_lua '
+
+            local cjson = require "cjson"
+            local producer = require "resty.kafka.producer"
+
+            local broker_list = {
+                { host = "$TEST_NGINX_KAFKA_HOST", port = $TEST_NGINX_KAFKA_SASL_PORT ,
+                sasl_config = { mechanism="SCRAM-SHA-512", user="$TEST_NGINX_KAFKA_SASL_USER", password = "$TEST_NGINX_KAFKA_SASL_PWD" },},
+            }
+
+            local message = "halo world"
+
+            local p = producer:new(broker_list)
+
+            local offset, err = p:send("test", nil, message)
+            if not offset then
+                ngx.say("send err:", err)
+                return
+            end
+
+            ngx.say("offset: ", tostring(offset))
+        ';
+    }
+--- request
+GET /t
+--- response_body_like
+.*offset.*
 --- no_error_log
 [error]
